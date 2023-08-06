@@ -44,7 +44,12 @@ class MyHttpServerRequest(val delegate: HttpServerRequest, val context: RoutingC
 
     inline fun <reified T> getQueryParam(key: String): T? {
 
-        return this.getQueryParams()[key]?.firstOrNull()?.let { context.stringParser.parse(javaType<T>(), it) }
+        return getQueryParam(key, javaType<T>()) as T?
+    }
+
+    fun getQueryParam(key: String, type: Type): Any? {
+
+        return this.getQueryParams()[key]?.firstOrNull()?.let { context.stringParser.parse(type, it) }
     }
 
     inline fun <reified T> getQueryParamOrFail(key: String): T {
@@ -52,19 +57,31 @@ class MyHttpServerRequest(val delegate: HttpServerRequest, val context: RoutingC
         return this.getQueryParam(key) ?: error("Parameter $key is missing.")
     }
 
-    inline fun <reified T> getParam(key: String): T? {
+    inline fun <reified T> getUriParam(key: String): T? {
 
-        return this.param(key)?.let { context.stringParser.parse(javaType<T>(), it) }
+        return getUriParam(key, javaType<T>()) as T?
     }
 
-    inline fun <reified T> getOrFail(key: String): T {
+    fun getUriParam(key: String, type: Type): Any? {
 
-        return this.getParam(key) ?: error("Parameter $key is missing.")
+        return this.param(key)?.let { context.stringParser.parse(type, it) }
+    }
+
+    inline fun <reified T> getUriParamOrFail(key: String): T {
+
+        return this.getUriParam(key) ?: error("Parameter $key is missing.")
     }
 
     inline fun <reified T> receiveAs(): Mono<T> {
 
         val type = javaType<T>() // Do not put inside Mono's lambda. Kotlin loses typ information.
+        return this.receive().aggregate().asString().mapNotNull { body ->
+            context.jsonMapper.deserialize(type, body)
+        }
+    }
+
+    fun receiveAs(type: Type): Mono<Any> {
+
         return this.receive().aggregate().asString().mapNotNull { body ->
             context.jsonMapper.deserialize(type, body)
         }
@@ -104,6 +121,10 @@ class MyHttpServerResponse(val delegate: HttpServerResponse, val context: Routin
     inline fun <reified T : Any> sendJson(data: Mono<T>): NettyOutbound {
 
         val type = javaType<T>()
+        return sendJson(data, type)
+    }
+
+    fun sendJson(data: Mono<Any>, type: Type): NettyOutbound {
 
         return delegate
             .addHeader(HttpHeaderNames.CONTENT_TYPE.toString(), HttpHeaderValues.APPLICATION_JSON.toString())
@@ -114,11 +135,16 @@ class MyHttpServerResponse(val delegate: HttpServerResponse, val context: Routin
 
     inline fun <reified T : Any> sendJson(data: T): NettyOutbound {
 
-        return delegate
-            .addHeader(HttpHeaderNames.CONTENT_TYPE.toString(), HttpHeaderValues.APPLICATION_JSON.toString())
-            .sendString(Mono.justOrEmpty(context.jsonMapper.serialize(javaType<T>(), data)))
+        val type = javaType<T>()
+        return sendJson(data, type)
     }
 
+    fun sendJson(data: Any, type: Type): NettyOutbound {
+
+        return delegate
+            .addHeader(HttpHeaderNames.CONTENT_TYPE.toString(), HttpHeaderValues.APPLICATION_JSON.toString())
+            .sendString(Mono.justOrEmpty(context.jsonMapper.serialize(type, data)))
+    }
 
     override fun sendWebsocket(websocketHandler: BiFunction<in WebsocketInbound, in WebsocketOutbound, out Publisher<Void>>, websocketServerSpec: WebsocketServerSpec): Mono<Void> {
         return delegate.sendWebsocket(websocketHandler, websocketServerSpec)
@@ -403,6 +429,10 @@ fun Route.options(segment: String, handler: HttpInterceptor): Route {
 
 fun Route.patch(segment: String, handler: HttpInterceptor): Route {
     return this.addRouteHandler(HttpPredicate.http(this.fullPath() + segment, null, HttpMethod.PATCH), handler)
+}
+
+fun Route.verb(segment: String, httpVerb: HttpMethod, handler: HttpInterceptor): Route {
+    return this.addRouteHandler(HttpPredicate.http(this.fullPath() + segment, null, httpVerb), handler)
 }
 
 fun Route.ws(segment: String, handler: WSInterceptor, websocketServerSpec: WebsocketServerSpec): Route {
